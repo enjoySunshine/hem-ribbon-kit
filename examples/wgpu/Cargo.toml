@@ -1,0 +1,19 @@
+[package]
+name = "wgpu-example"
+version = "0.1.0"
+authors = ["Nicolas Silva <nical@fastmail.com>"]
+workspace = "../.."
+edition = "2024"
+
+[[bin]]
+name = "wgpu"
+path = "src/main.rs"
+
+[dependencies]
+lyon = { path = "../../crates/lyon", features = ["extra"] }
+
+bytemuck = { version = "1.15.0", features = ["derive"] }
+env_logger = "0.11.3"
+futures = "0.3.30"
+wgpu = "30.0"
+winit = "0.30.9"

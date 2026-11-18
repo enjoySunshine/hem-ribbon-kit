@@ -1,0 +1,22 @@
+[package]
+name = "lyon_cli"
+version = "0.1.0"
+authors = ["Nicolas Silva <nical@fastmail.com>"]
+edition = "2024"
+workspace = "../"
+
+[[bin]]
+name = "lyon"
+path = "src/main.rs"
+
+[dependencies]
+lyon = { path = "../crates/lyon", features = ["extra", "debugger"]}
+clap = "3.2.22"
+rand = "0.6"
+env_logger = "0.7"
+wgpu = "30.0"
+winit = "0.30.9"
+futures = "0.3.5"
+bytemuck = "1.2.0"
+itertools = "0.7.8"
+regex = "1.5.5"

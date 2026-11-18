@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "crates/lyon",
+    "crates/path",
+    "crates/tessellation",
+    "crates/algorithms",
+    "crates/geom",
+    "crates/extra",
+    "cli",
+    "examples/wgpu",
+    "examples/wgpu_svg",
+    "bench/tess",
+    "bench/path",
+    "bench/geom",
+]
+
+exclude = [
+    ".vscode/*",
+    "all.sh",
+    "assets/*",
+    "examples/*",
+    "bench/*",
+    "cli/*",
+]
+
+resolver = "2"
+
+# Uncomment this when profiling.
+#[profile.release]
+#debug = true
