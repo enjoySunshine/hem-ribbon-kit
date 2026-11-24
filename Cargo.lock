@@ -1178,6 +1178,7 @@ name = "lyon_tessellation"
 version = "1.0.23"
 dependencies = [
  "float_next_after",
+ "lyon_algorithms",
  "lyon_extra",
  "lyon_path",
  "num-traits",

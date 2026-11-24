@@ -1,7 +1,7 @@
 //! Stroke-to-fill conversion algorithm.
 //!
-//! [`Stroker`] converts a stroked path into a fillable outline. See
-//!   [`StrokeToFillOptions`].
+//! [`Stroker`] converts a stroked path into a fillable outline using the same
+//! [`StrokeOptions`] as the stroke tessellator. See [`StrokeOptions`].
 //!
 //! The output has self-overlapping contours and must be filled
 //! with the non-zero fill rule.
@@ -11,7 +11,7 @@
 //! ```
 //! use lyon_algorithms::path::Path;
 //! use lyon_algorithms::path::math::point;
-//! use lyon_algorithms::stroke::{LineCap, LineJoin, StrokeToFillOptions, Stroker};
+//! use lyon_algorithms::stroke::{LineCap, LineJoin, StrokeOptions, Stroker};
 //!
 //! # fn main() {
 //! let mut builder = Path::builder();
@@ -21,7 +21,7 @@
 //! builder.end(false);
 //! let source = builder.build();
 //!
-//! let options = StrokeToFillOptions::new(10.0)
+//! let options = StrokeOptions::new(10.0)
 //!     .with_line_join(LineJoin::Round)
 //!     .with_line_cap(LineCap::Butt);
 //!
@@ -43,82 +43,80 @@ use num_traits::Float;
 use path::{builder::PathBuilder, Attributes, EndpointId, PathEvent, NO_ATTRIBUTES};
 use path::math::{Point, Vector};
 
-pub use crate::offset::LineJoin;
+pub use crate::offset::{LineCap, LineJoin};
 use crate::offset::Offsetter;
 
-/// End cap as defined by the SVG specification, plus a few extensions.
+/// The parameters of a stroke, shared by the triangle mesh and the fillable
+/// contour.
 ///
-/// See: <https://svgwg.org/specs/strokes/#StrokeLinecapProperty>
+/// The stroke tessellator (`lyon_tessellation`) and the stroke-to-fill
+/// conversion ([`Stroker`]) both take their line width, miter limit, join,
+/// end caps and tolerance from this single structure. Keeping one copy means
+/// the mesh and the hit-testing contour always describe the same stroke.
 ///
-/// This is a superset of [`lyon_path::LineCap`], which only contains the three
-/// caps defined by the SVG specification. Use [`From`] to convert a
-/// [`lyon_path::LineCap`] into a `LineCap`.
-#[non_exhaustive]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
-pub enum LineCap {
-    /// The stroke for each sub-path does not extend beyond its two endpoints.
-    /// A zero length sub-path will therefore not have any stroke.
-    Butt,
-    /// At the end of each sub-path, the shape representing the stroke will be
-    /// extended by a rectangle with the same width as the stroke width and
-    /// whose length is half of the stroke width. If a sub-path has zero length,
-    /// then the resulting effect is that the stroke for that sub-path consists
-    /// solely of a square with side length equal to the stroke width, centered
-    /// at the sub-path's point.
-    Square,
-    /// At each end of each sub-path, the shape representing the stroke will be
-    /// extended by a half circle with a radius equal to the stroke width.
-    /// If a sub-path has zero length, then the resulting effect is that the
-    /// stroke for that sub-path consists solely of a full circle centered at
-    /// the sub-path's point.
-    Round,
-    /// A half circle like [`LineCap::Round`], but carved into the stroke
-    /// instead of extending past the end of the sub-path.
-    ///
-    /// The outline keeps the same endpoints as a [`LineCap::Butt`] cap, so the
-    /// stroke never extends beyond the path. A zero length sub-path has no
-    /// stroke to carve into, so this behaves like [`LineCap::Butt`] there.
-    RoundInverted,
-    /// A triangle pointing past the end of the sub-path, with its base at the
-    /// end of the sub-path and its tip at half the stroke width past it.
-    ///
-    /// A zero length sub-path draws a triangle centered on its point.
-    Triangle,
-    /// A triangle pointing back into the stroke, carved out of it instead of
-    /// extending past the end of the sub-path.
-    ///
-    /// The outline keeps the same endpoints as a [`LineCap::Butt`] cap. A zero
-    /// length sub-path has no stroke to carve into, so this behaves like
-    /// [`LineCap::Butt`] there.
-    TriangleInverted,
-}
-
-impl From<path::LineCap> for LineCap {
-    fn from(cap: path::LineCap) -> Self {
-        match cap {
-            path::LineCap::Butt => LineCap::Butt,
-            path::LineCap::Square => LineCap::Square,
-            path::LineCap::Round => LineCap::Round,
-        }
-    }
-}
-
-/// Parameters for converting a stroked path into a fill.
+/// The stroke-to-fill output has self-overlapping contours and must be filled
+/// with the non-zero fill rule.
 ///
-/// The produced path must be filled with the non-zero fill rule.
+/// In addition to a symmetric line width, asymmetric strokes can be specified
+/// with [`StrokeOptions::with_offsets`]. Per-endpoint varying widths are
+/// driven by a custom path attribute, selected with
+/// [`StrokeOptions::with_variable_line_width`]; the tessellator interpolates
+/// the width along the path while the stroke-to-fill conversion ignores it
+/// (it has no attributes on its input builder).
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct StrokeToFillOptions {
-    pub(crate) offsets: (f32, f32),
-    pub(crate) miter_limit: f32,
-    pub(crate) tolerance: f32,
-    pub(crate) line_join: LineJoin,
-    pub(crate) start_cap: LineCap,
-    pub(crate) end_cap: LineCap,
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[non_exhaustive]
+pub struct StrokeOptions {
+    /// What cap to use at the start of each sub-path.
+    ///
+    /// Default value: `LineCap::Butt`.
+    pub start_cap: LineCap,
+
+    /// What cap to use at the end of each sub-path.
+    ///
+    /// Default value: `LineCap::Butt`.
+    pub end_cap: LineCap,
+
+    /// How segments of the stroke are joined together.
+    ///
+    /// Default value: `LineJoin::Miter`.
+    pub line_join: LineJoin,
+
+    /// Line width.
+    ///
+    /// Default value: `StrokeOptions::DEFAULT_LINE_WIDTH`.
+    pub line_width: f32,
+
+    /// Index of a custom attribute defining a per-endpoint factor that
+    /// modulates the line width. The actual width at an endpoint is
+    /// `line_width` multiplied by this factor.
+    ///
+    /// Only the stroke tessellator consumes custom attributes; the
+    /// stroke-to-fill conversion does not vary the width.
+    ///
+    /// Default value: `None`.
+    pub variable_line_width: Option<path::AttributeIndex>,
+
+    /// See the SVG specification.
+    ///
+    /// Must be greater than or equal to 1.0.
+    /// Default value: `StrokeOptions::DEFAULT_MITER_LIMIT`.
+    pub miter_limit: f32,
+
+    /// Maximum allowed distance to the path when approximating curves.
+    ///
+    /// Default value: `StrokeOptions::DEFAULT_TOLERANCE`.
+    pub tolerance: f32,
+
+    /// Distances from the source path to each side of the stroke, when they
+    /// differ. When `None`, both sides sit at `line_width / 2`.
+    pub(crate) offsets: Option<(f32, f32)>,
+
+    /// Whether zero-length sub-paths draw their caps around their point.
     pub(crate) add_empty_caps: bool,
 }
 
-impl StrokeToFillOptions {
+impl StrokeOptions {
     /// Minimum miter limit as defined by the SVG specification.
     ///
     /// See [StrokeMiterLimitProperty](https://svgwg.org/specs/strokes/#StrokeMiterlimitProperty)
@@ -132,39 +130,31 @@ impl StrokeToFillOptions {
     pub const DEFAULT_LINE_WIDTH: f32 = 1.0;
     pub const DEFAULT_TOLERANCE: f32 = 0.1;
 
+    pub const DEFAULT: Self = StrokeOptions {
+        start_cap: Self::DEFAULT_LINE_CAP,
+        end_cap: Self::DEFAULT_LINE_CAP,
+        line_join: Self::DEFAULT_LINE_JOIN,
+        line_width: Self::DEFAULT_LINE_WIDTH,
+        variable_line_width: None,
+        miter_limit: Self::DEFAULT_MITER_LIMIT,
+        tolerance: Self::DEFAULT_TOLERANCE,
+        offsets: None,
+        add_empty_caps: true,
+    };
+
     #[inline]
     pub fn new(width: f32) -> Self {
-        StrokeToFillOptions {
-            offsets: (-width * 0.5, width * 0.5),
-            miter_limit: Self::DEFAULT_MITER_LIMIT,
-            tolerance: Self::DEFAULT_TOLERANCE,
-            line_join: Self::DEFAULT_LINE_JOIN,
-            start_cap: Self::DEFAULT_LINE_CAP,
-            end_cap: Self::DEFAULT_LINE_CAP,
-            add_empty_caps: true,
-        }
+        Self::DEFAULT.with_line_width(width)
     }
 
     #[inline]
-    pub fn with_line_width(mut self, width: f32) -> Self {
-        self.offsets = (-width * 0.5, width * 0.5);
-        self
-    }
-
-    /// Instead of using a symmetric line width along the path, specify
-    /// two offsets.
-    ///
-    /// `StrokeToFillOptions::with_line_width(w)` is equivalent to
-    /// `StrokeToFillOptions::with_offsets(-w * 0.5, w * 0.5)`.
-    #[inline]
-    pub fn with_offsets(mut self, first: f32, second: f32) -> Self {
-        self.offsets = (first, second);
-        self
+    pub fn tolerance(tolerance: f32) -> Self {
+        Self::DEFAULT.with_tolerance(tolerance)
     }
 
     #[inline]
-    pub fn with_line_join(mut self, join: LineJoin) -> Self {
-        self.line_join = join;
+    pub fn with_tolerance(mut self, tolerance: f32) -> Self {
+        self.tolerance = tolerance;
         self
     }
 
@@ -187,32 +177,76 @@ impl StrokeToFillOptions {
         self
     }
 
+    #[inline]
+    pub fn with_line_join(mut self, join: LineJoin) -> Self {
+        self.line_join = join;
+        self
+    }
+
+    #[inline]
+    pub fn with_line_width(mut self, width: f32) -> Self {
+        self.line_width = width;
+        self.offsets = None;
+        self
+    }
+
+    /// Instead of using a symmetric line width along the path, specify
+    /// two offsets, one for each side.
+    ///
+    /// `StrokeOptions::with_line_width(w)` is equivalent to
+    /// `StrokeOptions::with_offsets(-w * 0.5, w * 0.5)`.
+    #[inline]
+    pub fn with_offsets(mut self, first: f32, second: f32) -> Self {
+        self.offsets = Some((first, second));
+        self.line_width = (second - first).abs();
+        self
+    }
+
     /// Sets the miter limit, clamped to at least
-    /// [`StrokeToFillOptions::MINIMUM_MITER_LIMIT`].
+    /// [`StrokeOptions::MINIMUM_MITER_LIMIT`].
     #[inline]
     pub fn with_miter_limit(mut self, limit: f32) -> Self {
         self.miter_limit = limit.max(Self::MINIMUM_MITER_LIMIT);
         self
     }
 
+    /// Selects a custom attribute whose value modulates the line width at
+    /// each endpoint. The tessellator interpolates the factor between
+    /// endpoints; the stroke-to-fill conversion ignores it.
     #[inline]
-    pub fn with_tolerance(mut self, tolerance: f32) -> Self {
-        self.tolerance = tolerance;
+    pub fn with_variable_line_width(mut self, attribute_index: path::AttributeIndex) -> Self {
+        self.variable_line_width = Some(attribute_index);
         self
     }
 
+    /// Whether zero-length sub-paths draw their caps around their point.
+    ///
+    /// Default value: `true`.
     #[inline]
     pub fn with_empty_caps(mut self, add_empty_caps: bool) -> Self {
         self.add_empty_caps = add_empty_caps;
         self
     }
-}
 
-impl Default for StrokeToFillOptions {
-    fn default() -> Self {
-        StrokeToFillOptions::new(StrokeToFillOptions::DEFAULT_LINE_WIDTH)
+    /// The offset to each side of the source path.
+    #[inline]
+    pub(crate) fn side_offsets(&self) -> (f32, f32) {
+        self.offsets
+            .unwrap_or_else(|| (-self.line_width * 0.5, self.line_width * 0.5))
     }
 }
+
+impl Default for StrokeOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Deprecated name for [`StrokeOptions`].
+///
+/// The stroke tessellator and the stroke-to-fill conversion now share a single
+/// set of options, so `StrokeToFillOptions` is kept only as an alias.
+pub type StrokeToFillOptions = StrokeOptions;
 
 /// A context object that can build the contour of a stroked path.
 ///
@@ -248,7 +282,7 @@ impl Stroker {
     pub fn builder<'l>(
         &'l mut self,
         output: &'l mut dyn PathBuilder,
-        options: &StrokeToFillOptions
+        options: &StrokeOptions
     ) -> StrokeToFillBuilder {
         StrokeToFillBuilder::new(self, output, options)
     }
@@ -260,7 +294,7 @@ impl Stroker {
     pub fn stroke_to_fill(
         &mut self,
         input: impl Iterator<Item = PathEvent>,
-        options: &StrokeToFillOptions,
+        options: &StrokeOptions,
         output: &mut dyn PathBuilder,
     ) {
         let mut builder = self.builder(output, options);
@@ -311,10 +345,11 @@ impl<'l> StrokeToFillBuilder<'l> {
     fn new(
         stroker: &'l mut Stroker,
         output: &'l mut dyn PathBuilder,
-        options: &StrokeToFillOptions
+        options: &StrokeOptions
     ) -> Self {
+        let offsets = options.side_offsets();
         let mut offsetter = Offsetter::new(
-            [options.offsets.0, options.offsets.1],
+            [offsets.0, offsets.1],
             options.line_join,
             options.miter_limit,
             options.tolerance,
@@ -323,14 +358,14 @@ impl<'l> StrokeToFillBuilder<'l> {
         // Open sub-paths get caps even if they end at their start point.
         offsetter.close_if_end_at_start = false;
 
-        let opposite = std::mem::take(&mut stroker.opposite);
+        let opposite = core::mem::take(&mut stroker.opposite);
 
         StrokeToFillBuilder {
             stroker,
             output,
             opposite,
             offsetter,
-            offsets: options.offsets,
+            offsets,
             start_cap: options.start_cap,
             end_cap: options.end_cap,
             add_empty_caps: options.add_empty_caps,
@@ -461,7 +496,7 @@ impl<'l> StrokeToFillBuilder<'l> {
 
 impl <'l> Drop for StrokeToFillBuilder<'l> {
     fn drop(&mut self) {
-        std::mem::swap(&mut self.opposite, &mut self.stroker.opposite);
+        core::mem::swap(&mut self.opposite, &mut self.stroker.opposite);
     }
 }
 

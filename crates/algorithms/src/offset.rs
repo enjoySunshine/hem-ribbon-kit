@@ -49,6 +49,64 @@ impl From<path::LineJoin> for LineJoin {
     }
 }
 
+/// End cap as defined by the SVG specification, plus a few extensions.
+///
+/// See: <https://svgwg.org/specs/strokes/#StrokeLinecapProperty>
+///
+/// This is a superset of [`lyon_path::LineCap`], which only contains the three
+/// caps defined by the SVG specification. Use [`From`] to convert a
+/// [`lyon_path::LineCap`] into a `LineCap`.
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+pub enum LineCap {
+    /// The stroke for each sub-path does not extend beyond its two endpoints.
+    /// A zero length sub-path will therefore not have any stroke.
+    Butt,
+    /// At the end of each sub-path, the shape representing the stroke will be
+    /// extended by a rectangle with the same width as the stroke width and
+    /// whose length is half of the stroke width. If a sub-path has zero length,
+    /// then the resulting effect is that the stroke for that sub-path consists
+    /// solely of a square with side length equal to the stroke width, centered
+    /// at the sub-path's point.
+    Square,
+    /// At each end of each sub-path, the shape representing the stroke will be
+    /// extended by a half circle with a radius equal to the stroke width.
+    /// If a sub-path has zero length, then the resulting effect is that the
+    /// stroke for that sub-path consists solely of a full circle centered at
+    /// the sub-path's point.
+    Round,
+    /// A half circle like [`LineCap::Round`], but carved into the stroke
+    /// instead of extending past the end of the sub-path.
+    ///
+    /// The outline keeps the same endpoints as a [`LineCap::Butt`] cap, so the
+    /// stroke never extends beyond the path. A zero length sub-path has no
+    /// stroke to carve into, so this behaves like [`LineCap::Butt`] there.
+    RoundInverted,
+    /// A triangle pointing past the end of the sub-path, with its base at the
+    /// end of the sub-path and its tip at half the stroke width past it.
+    ///
+    /// A zero length sub-path draws a triangle centered on its point.
+    Triangle,
+    /// A triangle pointing back into the stroke, carved out of it instead of
+    /// extending past the end of the sub-path.
+    ///
+    /// The outline keeps the same endpoints as a [`LineCap::Butt`] cap. A zero
+    /// length sub-path has no stroke to carve into, so this behaves like
+    /// [`LineCap::Butt`] there.
+    TriangleInverted,
+}
+
+impl From<path::LineCap> for LineCap {
+    fn from(cap: path::LineCap) -> Self {
+        match cap {
+            path::LineCap::Butt => LineCap::Butt,
+            path::LineCap::Square => LineCap::Square,
+            path::LineCap::Round => LineCap::Round,
+        }
+    }
+}
+
 /// Parameters for offsetting paths.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct OffsetOptions {

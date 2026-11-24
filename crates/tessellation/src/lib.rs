@@ -234,7 +234,12 @@ pub use crate::geometry_builder::{
 #[doc(inline)]
 pub use crate::error::*;
 
-pub use crate::path::{AttributeIndex, Attributes, FillRule, LineCap, LineJoin, Side};
+pub use crate::path::{AttributeIndex, Attributes, FillRule, Side};
+
+// The stroke options and their cap/join enums are shared with the
+// stroke-to-fill conversion in lyon_algorithms, so that the triangle mesh
+// and the hit-testing contour describe the same stroke.
+pub use lyon_algorithms::stroke::{LineCap, LineJoin, StrokeOptions, StrokeToFillOptions};
 
 use crate::path::EndpointId;
 
@@ -305,135 +310,6 @@ pub enum Orientation {
     Vertical,
 }
 
-/// Parameters for the tessellator.
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
-#[non_exhaustive]
-pub struct StrokeOptions {
-    /// What cap to use at the start of each sub-path.
-    ///
-    /// Default value: `LineCap::Butt`.
-    pub start_cap: LineCap,
-
-    /// What cap to use at the end of each sub-path.
-    ///
-    /// Default value: `LineCap::Butt`.
-    pub end_cap: LineCap,
-
-    /// See the SVG specification.
-    ///
-    /// Default value: `LineJoin::Miter`.
-    pub line_join: LineJoin,
-
-    /// Line width
-    ///
-    /// Default value: `StrokeOptions::DEFAULT_LINE_WIDTH`.
-    pub line_width: f32,
-
-    /// Index of a custom attribute defining a per-vertex
-    /// factor to modulate the line width.
-    ///
-    /// Default value: `None`.
-    pub variable_line_width: Option<AttributeIndex>,
-
-    /// See the SVG specification.
-    ///
-    /// Must be greater than or equal to 1.0.
-    /// Default value: `StrokeOptions::DEFAULT_MITER_LIMIT`.
-    pub miter_limit: f32,
-
-    /// Maximum allowed distance to the path when building an approximation.
-    ///
-    /// See [Flattening and tolerance](index.html#flattening-and-tolerance).
-    /// Default value: `StrokeOptions::DEFAULT_TOLERANCE`.
-    pub tolerance: f32,
-}
-
-impl StrokeOptions {
-    /// Minimum miter limit as defined by the SVG specification.
-    ///
-    /// See [StrokeMiterLimitProperty](https://svgwg.org/specs/strokes/#StrokeMiterlimitProperty)
-    pub const MINIMUM_MITER_LIMIT: f32 = 1.0;
-    /// Default miter limit as defined by the SVG specification.
-    ///
-    /// See [StrokeMiterLimitProperty](https://svgwg.org/specs/strokes/#StrokeMiterlimitProperty)
-    pub const DEFAULT_MITER_LIMIT: f32 = 4.0;
-    pub const DEFAULT_LINE_CAP: LineCap = LineCap::Butt;
-    pub const DEFAULT_LINE_JOIN: LineJoin = LineJoin::Miter;
-    pub const DEFAULT_LINE_WIDTH: f32 = 1.0;
-    pub const DEFAULT_TOLERANCE: f32 = 0.1;
-
-    pub const DEFAULT: Self = StrokeOptions {
-        start_cap: Self::DEFAULT_LINE_CAP,
-        end_cap: Self::DEFAULT_LINE_CAP,
-        line_join: Self::DEFAULT_LINE_JOIN,
-        line_width: Self::DEFAULT_LINE_WIDTH,
-        variable_line_width: None,
-        miter_limit: Self::DEFAULT_MITER_LIMIT,
-        tolerance: Self::DEFAULT_TOLERANCE,
-    };
-
-    #[inline]
-    pub fn tolerance(tolerance: f32) -> Self {
-        Self::DEFAULT.with_tolerance(tolerance)
-    }
-
-    #[inline]
-    pub const fn with_tolerance(mut self, tolerance: f32) -> Self {
-        self.tolerance = tolerance;
-        self
-    }
-
-    #[inline]
-    pub const fn with_line_cap(mut self, cap: LineCap) -> Self {
-        self.start_cap = cap;
-        self.end_cap = cap;
-        self
-    }
-
-    #[inline]
-    pub const fn with_start_cap(mut self, cap: LineCap) -> Self {
-        self.start_cap = cap;
-        self
-    }
-
-    #[inline]
-    pub const fn with_end_cap(mut self, cap: LineCap) -> Self {
-        self.end_cap = cap;
-        self
-    }
-
-    #[inline]
-    pub const fn with_line_join(mut self, join: LineJoin) -> Self {
-        self.line_join = join;
-        self
-    }
-
-    #[inline]
-    pub const fn with_line_width(mut self, width: f32) -> Self {
-        self.line_width = width;
-        self
-    }
-
-    #[inline]
-    pub fn with_miter_limit(mut self, limit: f32) -> Self {
-        assert!(limit >= Self::MINIMUM_MITER_LIMIT);
-        self.miter_limit = limit;
-        self
-    }
-
-    #[inline]
-    pub const fn with_variable_line_width(mut self, idx: AttributeIndex) -> Self {
-        self.variable_line_width = Some(idx);
-        self
-    }
-}
-
-impl Default for StrokeOptions {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
 
 /// Parameters for the fill tessellator.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -680,7 +556,9 @@ fn test_with_miter_limit() {
 }
 
 #[test]
-#[should_panic]
 fn test_with_invalid_miter_limit() {
-    let _ = StrokeOptions::default().with_miter_limit(0.0);
+    // The shared options clamp the miter limit to its SVG minimum instead
+    // of panicking.
+    let stroke_options = StrokeOptions::default().with_miter_limit(0.0);
+    assert_eq!(stroke_options.miter_limit, StrokeOptions::MINIMUM_MITER_LIMIT);
 }
